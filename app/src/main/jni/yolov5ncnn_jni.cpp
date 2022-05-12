@@ -28,23 +28,10 @@ static ncnn::PoolAllocator g_workspace_pool_allocator;
 static ncnn::Net yolov5;
 static ncnn::Net classifier;
 
-//#if defined(USE_NCNN_SIMPLEOCV)
-//#include "simpleocv.h"
-//#else
-//#include <opencv2/core/core.hpp>
-//#include <opencv2/highgui/highgui.hpp>
-//#include <opencv2/imgproc/imgproc.hpp>
-//#endif
 #include <float.h>
 #include <stdio.h>
 #include <vector>
-
-//struct Object
-//{
-//    cv::Rect_<float> rect;
-//    int label;
-//    float prob;
-//};
+#include <algorithm>
 
 struct Object
 {
@@ -178,38 +165,11 @@ static void generate_proposals(const ncnn::Mat& anchors, int stride, const ncnn:
         {
             for (int j = 0; j < num_grid_x; j++)
             {
-                // find class index with max class score
-                int color_index = 0;
-                float color_score = -FLT_MAX;
-                for (int k = 0; k < 4; k++)
-                {
-                    float score = feat_blob.channel(q * feat_offset + 6 + k).row(i)[j];
-                    if (score > color_score)
-                    {
-                        color_index = k;
-                        color_score = score;
-                    }
-                }
-                int value_index = 0;
-                float value_score = -FLT_MAX;
-                for (int k = 0; k < 14; k++)
-                {
-                    float score = feat_blob.channel(q * feat_offset + 10 + k).row(i)[j];
-                    if (score > value_score)
-                    {
-                        value_index = k;
-                        value_score = score;
-                    }
-                }
-
-                int class_index = 4 * value_index + color_index + 1;
-
                 float box_score = feat_blob.channel(q * feat_offset + 4).row(i)[j];
 
                 float confidence_box = sigmoid(box_score);
-                float confidence_class = 0.5 * (sigmoid(value_score) + sigmoid(color_score));
 
-                if (confidence_box >= 0.1 && confidence_class >= prob_threshold)
+                if (confidence_box >= prob_threshold)
                 {
                     // yolov5/models/yolo.py Detect forward
                     // y = x[i].sigmoid()
@@ -237,10 +197,7 @@ static void generate_proposals(const ncnn::Mat& anchors, int stride, const ncnn:
                     obj.y = y0;
                     obj.w = x1 - x0;
                     obj.h = y1 - y0;
-                    obj.prob = confidence_class;
-                    obj.label = class_index;
-                    obj._value = value_index;
-                    obj._color = color_index;
+                    obj.prob = confidence_box;
 
                     objects.push_back(obj);
                 }
@@ -257,10 +214,7 @@ static jfieldID xId;
 static jfieldID yId;
 static jfieldID wId;
 static jfieldID hId;
-static jfieldID labelId;
 static jfieldID probId;
-static jfieldID _valueId;
-static jfieldID _colorId;
 
 JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved)
 {
@@ -298,8 +252,7 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Init(JNIEnv* e
     classifier.opt = opt;
     // init param
     {
-        int ret = yolov5.load_param(mgr, "multilabel_yolov5n6.ncnn.param");
-        ret = classifier.load_param(mgr, "rummi.param");
+        int ret = yolov5.load_param(mgr, "yolov5n_final.ncnn.param");
         if (ret != 0)
         {
             __android_log_print(ANDROID_LOG_DEBUG, "YoloV5Ncnn", "load_param failed");
@@ -309,8 +262,7 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Init(JNIEnv* e
 
     // init bin
     {
-        int ret = yolov5.load_model(mgr, "multilabel_yolov5n6.ncnn.bin");
-        ret = classifier.load_model(mgr, "rummi.bin");
+        int ret = yolov5.load_model(mgr, "yolov5n_final.ncnn.bin");
         if (ret != 0)
         {
             __android_log_print(ANDROID_LOG_DEBUG, "YoloV5Ncnn", "load_model failed");
@@ -328,10 +280,7 @@ JNIEXPORT jboolean JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Init(JNIEnv* e
     yId = env->GetFieldID(objCls, "y", "F");
     wId = env->GetFieldID(objCls, "w", "F");
     hId = env->GetFieldID(objCls, "h", "F");
-    labelId = env->GetFieldID(objCls, "label", "Ljava/lang/String;");
     probId = env->GetFieldID(objCls, "prob", "F");
-    _valueId = env->GetFieldID(objCls, "_value", "I");
-    _colorId = env->GetFieldID(objCls, "_color", "I");
 
     return JNI_TRUE;
 }
@@ -356,8 +305,7 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
         return NULL;
 
     // ncnn from bitmap
-//    const int target_size = 640;
-    const int target_size = 1280;
+    const int target_size = 416;
 
     // letterbox pad to multiple of 32
     int w = width;
@@ -380,8 +328,6 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
 
     // pad to target_size rectangle
     // yolov5/utils/datasets.py letterbox
-//    int wpad = (w + 31) / 32 * 32 - w;
-//    int hpad = (h + 31) / 32 * 32 - h;
     int wpad = (w + 63) / 64 * 64 - w;
     int hpad = (h + 63) / 64 * 64 - h;
     ncnn::Mat in_pad;
@@ -390,18 +336,17 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
     // yolov5
     std::vector<Object> objects;
     {
-        const float prob_threshold = 0.5f;
+        const float prob_threshold = 0.3f;
         const float nms_threshold = 0.45f;
 
         const float norm_vals[3] = {1 / 255.f, 1 / 255.f, 1 / 255.f};
-//        const float norm_vals[3] = {1.f, 1.f, 1.f};
         in_pad.substract_mean_normalize(0, norm_vals);
 
         ncnn::Extractor ex = yolov5.create_extractor();
 
         ex.set_vulkan_compute(use_gpu);
 
-        int res = ex.input("in0", in_pad);
+        ex.input("in0", in_pad);
 //        for (int i = 0; i < in_pad.w; i++)
 //        {
 //            for (int j = 0; j < in_pad.h; j++)
@@ -418,7 +363,7 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
         // stride 8
         {
             ncnn::Mat out;
-            int res = ex.extract("out0", out, 1);
+            ex.extract("out0", out, 1);
 //            for (int i = 0; i < in_pad.w; i++)
 //            {
 //                for (int j = 0; j < in_pad.h; j++)
@@ -428,12 +373,12 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
 //            }
 
             ncnn::Mat anchors(6);
-            anchors[0] = 19.f;
-            anchors[1] = 27.f;
-            anchors[2] = 44.f;
-            anchors[3] = 40.f;
-            anchors[4] = 38.f;
-            anchors[5] = 94.f;
+            anchors[0] = 10.f;
+            anchors[1] = 13.f;
+            anchors[2] = 16.f;
+            anchors[3] = 30.f;
+            anchors[4] = 33.f;
+            anchors[5] = 23.f;
 
             std::vector<Object> objects8;
             generate_proposals(anchors, 8, in_pad, out, prob_threshold, objects8);
@@ -447,12 +392,12 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
             ex.extract("out1", out, 1);
 
             ncnn::Mat anchors(6);
-            anchors[0] = 96.f;
-            anchors[1] = 68.f;
-            anchors[2] = 86.f;
-            anchors[3] = 152.f;
-            anchors[4] = 180.f;
-            anchors[5] = 137.f;
+            anchors[0] = 30.f;
+            anchors[1] = 61.f;
+            anchors[2] = 62.f;
+            anchors[3] = 45.f;
+            anchors[4] = 59.f;
+            anchors[5] = 119.f;
 
             std::vector<Object> objects16;
             generate_proposals(anchors, 16, in_pad, out, prob_threshold, objects16);
@@ -466,37 +411,17 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
             ex.extract("out2", out, 1);
 
             ncnn::Mat anchors(6);
-            anchors[0] = 140.f;
-            anchors[1] = 301.f;
-            anchors[2] = 303.f;
-            anchors[3] = 264.f;
-            anchors[4] = 238.f;
-            anchors[5] = 542.f;
+            anchors[0] = 116.f;
+            anchors[1] = 90.f;
+            anchors[2] = 156.f;
+            anchors[3] = 198.f;
+            anchors[4] = 373.f;
+            anchors[5] = 326.f;
 
             std::vector<Object> objects32;
             generate_proposals(anchors, 32, in_pad, out, prob_threshold, objects32);
 
             proposals.insert(proposals.end(), objects32.begin(), objects32.end());
-        }
-
-        // stride 64
-        {
-            ncnn::Mat out;
-            int res = ex.extract("out3", out, 1);
-            __android_log_print(ANDROID_LOG_DEBUG, "YoloV5Ncnn", "64 result %d", res);
-
-            ncnn::Mat anchors(6);
-            anchors[0] = 436.f;
-            anchors[1] = 615.f;
-            anchors[2] = 739.f;
-            anchors[3] = 380.f;
-            anchors[4] = 925.f;
-            anchors[5] = 792.f;
-
-            std::vector<Object> objects64;
-            generate_proposals(anchors, 64, in_pad, out, prob_threshold, objects64);
-
-            proposals.insert(proposals.end(), objects64.begin(), objects64.end());
         }
 
         double elasped1 = ncnn::get_current_time() - start_time1;
@@ -535,16 +460,10 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
         }
     }
 
-    // objects to Obj[]
-    static const char* class_names[] = {
-            "empty","1-blue","1-black","1-orange","1-red","2-blue","2-black","2-orange","2-red",
-            "3-blue","3-black","3-orange","3-red","4-blue","4-black","4-orange","4-red",
-            "5-blue","5-black","5-orange","5-red","6-blue","6-black","6-orange","6-red",
-            "7-blue","7-black","7-orange","7-red","8-blue","8-black","8-orange","8-red",
-            "9-blue","9-black","9-orange","9-red","10-blue","10-black","10-orange","10-red",
-            "11-blue","11-black","11-orange","11-red","12-blue","12-black","12-orange","12-red",
-            "13-blue","13-black","13-orange","13-red","j-blue","j-black","j-orange","j-red",
-    };
+    sort(objects.begin(), objects.end(), [](Object a, Object b){
+        if (std::abs(a.y - b.y) < a.h/2) return a.x < b.x;
+        return a.y < b.y;
+    });
 
     jobjectArray jObjArray = env->NewObjectArray(objects.size(), objCls, NULL);
 
@@ -556,10 +475,7 @@ JNIEXPORT jobjectArray JNICALL Java_com_tencent_yolov5ncnn_YoloV5Ncnn_Detect(JNI
         env->SetFloatField(jObj, yId, objects[i].y);
         env->SetFloatField(jObj, wId, objects[i].w);
         env->SetFloatField(jObj, hId, objects[i].h);
-        env->SetObjectField(jObj, labelId, env->NewStringUTF(class_names[objects[i].label]));
         env->SetFloatField(jObj, probId, objects[i].prob);
-        env->SetIntField(jObj, _valueId, objects[i]._value);
-        env->SetIntField(jObj, _colorId, objects[i]._color);
 
         env->SetObjectArrayElement(jObjArray, i, jObj);
     }

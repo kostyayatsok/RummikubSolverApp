@@ -16,6 +16,7 @@ package com.tencent.yolov5ncnn;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -31,6 +32,8 @@ import android.provider.MediaStore;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ImageView;
@@ -56,10 +59,10 @@ public class MainActivity extends Activity
 {
     private static final int SELECT_IMAGE = 1;
     private static final int TAKE_IMAGE = 2;
+    public static float probThresh = 0.3f;
 
     public LinearLayout boardView, handView;
     private Button solveButton;
-    private TextView scoreView;
     private Bitmap bitmap = null;
     private Bitmap yourSelectedImage = null;
     private Uri lastUri = null;
@@ -69,7 +72,6 @@ public class MainActivity extends Activity
     private YoloV5Ncnn yolov5ncnn = new YoloV5Ncnn();
     private Solver solver = new Solver();
     private ClassifierONNX classifier;
-    private Bitmap background;
 
     private int tileWidth, tileHeight, tileSpace;
 
@@ -81,6 +83,11 @@ public class MainActivity extends Activity
     public void onCreate(Bundle savedInstanceState)
     {
         super.onCreate(savedInstanceState);
+
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+//        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+//                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+
         setContentView(R.layout.main);
 
         boolean ret_init = yolov5ncnn.Init(getAssets());
@@ -90,27 +97,14 @@ public class MainActivity extends Activity
         }
 
 
-//        boolean ret_init = classifierNcnn.Init(getAssets());
-//        if (!ret_init)
-//        {
-//            Log.e("MainActivity", "classifier Init failed");
-//        }
         boardView = findViewById(R.id.board);
         handView = findViewById(R.id.hand);
-        scoreView = findViewById(R.id.score);
         solveButton = findViewById(R.id.solve);
 
-        boardView.setOnClickListener(v -> scan(true));
-        handView.setOnClickListener(arg0 -> scan(false));
-//        solutionView.setOnClickListener(v -> displayPopupWindow(solutionView));
-//        Button buttonSolve = findViewById(R.id.solve);
-//        buttonSolve.setOnClickListener(arg0 -> {
+        findViewById(R.id.scanBoard).setOnClickListener(v -> scan(true));
+        findViewById(R.id.scanHand).setOnClickListener(arg0 -> scan(false));
 
-//        });
         classifier = new ClassifierONNX(this);
-
-        boardView.setBackground(getDrawable(R.drawable.background));
-        handView.setBackground(getDrawable(R.drawable.background));
 
         solveButton.setOnClickListener(arg -> {
             YoloV5Ncnn.Obj[][] solution = solve();
@@ -129,6 +123,8 @@ public class MainActivity extends Activity
 
     private void displayPopupWindow(TextView anchorView, int[][] tiles) {
         anchorView.setBackground(getDrawable(R.drawable.broder_magenta));
+        int v = Arrays.asList(values).indexOf(anchorView.getText());
+        int c = Arrays.asList(colors).indexOf(anchorView.getCurrentTextColor());
 
         PopupWindow popup = new PopupWindow(this);
         View changeTileView = getLayoutInflater().inflate(R.layout.change_tile, null);
@@ -145,14 +141,7 @@ public class MainActivity extends Activity
             btnTag.setClickable(true);
             btnTag.setBackground(getDrawable(R.drawable.broder_gray));
             btnTag.setOnClickListener(arg0->{
-                int v = Arrays.asList(values).indexOf(anchorView.getText());
-                int c = Arrays.asList(colors).indexOf(anchorView.getCurrentTextColor());
-                tiles[v][c]--;
-
                 anchorView.setText(val);
-
-                v = Arrays.asList(values).indexOf(val);
-                tiles[v][c]++;
             });
             layout.addView(btnTag);
 
@@ -163,14 +152,7 @@ public class MainActivity extends Activity
             btnTag.setLayoutParams(params);
             btnTag.setBackgroundColor(col);
             btnTag.setOnClickListener(arg0->{
-                int v = Arrays.asList(values).indexOf(anchorView.getText());
-                int c = Arrays.asList(colors).indexOf(anchorView.getCurrentTextColor());
-                tiles[v][c]--;
-
                 anchorView.setTextColor(col);
-
-                c = Arrays.asList(colors).indexOf(col);
-                tiles[v][c]++;
             });
             layout.addView(btnTag);
 
@@ -180,9 +162,31 @@ public class MainActivity extends Activity
         popup.setHeight(WindowManager.LayoutParams.WRAP_CONTENT);
         popup.setWidth(WindowManager.LayoutParams.WRAP_CONTENT);
         // Closes the popup window when touch outside of it - when looses focus
-        popup.setOutsideTouchable(true);
-//        popup.setFocusable(true);
+        popup.setOutsideTouchable(false);
+        popup.setFocusable(true);
+        popup.setOnDismissListener(() -> {
+            tiles[v][c]--;
+            int new_v = Arrays.asList(values).indexOf(anchorView.getText());
+            int new_c = Arrays.asList(colors).indexOf(anchorView.getCurrentTextColor());
+            tiles[new_v][new_c]++;
+            anchorView.setBackground(MainActivity.this.getDrawable(R.drawable.broder_gray));
+        });
         popup.showAsDropDown(anchorView);
+    }
+
+    public void popupMessage(){
+        AlertDialog.Builder alertDialogBuilder = new AlertDialog.Builder(this);
+        alertDialogBuilder.setMessage("The board is incorrect!\n Fix it manually or take a new photo.");
+//        alertDialogBuilder.setIcon(R.drawable.ic_no_internet);
+        alertDialogBuilder.setTitle("Fail to solve");
+        alertDialogBuilder.setNegativeButton("OK", (dialogInterface, i) -> {
+//            Log.d("internet","Ok btn pressed");
+//            // add these two lines, if you wish to close the app:
+//            finishAffinity();
+//            System.exit(0);
+        });
+        AlertDialog alertDialog = alertDialogBuilder.create();
+        alertDialog.show();
     }
 
     private YoloV5Ncnn.Obj[][] solve()
@@ -190,15 +194,15 @@ public class MainActivity extends Activity
         int[] runsHashes = new int[solver.K];
         int score = solver.maxScore(0, runsHashes);
         if (score < 0) {
-            scoreView.setText("Board is incorrect");
-        }
-        int handScore = score;
-        for (int[] row : solver.board)
-            for (int c : row)
-                handScore -= c;
-        scoreView.setText("You can put " + handScore + " tiles");
-        System.out.println("Your possible score: " + handScore + " " + score);
-        if (score > 0) {
+            popupMessage();
+            return new YoloV5Ncnn.Obj[0][];
+        } else {
+            int handScore = score;
+            for (int[] row : solver.board)
+                for (int c : row)
+                    handScore -= c;
+            System.out.println("Your possible score: " + handScore + " " + score);
+
             ArrayList<ArrayList<Solver.Pair<Integer, Integer>>> rows = solver.restore();
             YoloV5Ncnn.Obj[][] rowsObj = new YoloV5Ncnn.Obj[rows.size()][];
             int[][] tiles = Arrays.stream(solver.board).map(int[]::clone).toArray(int[][]::new);
@@ -221,7 +225,6 @@ public class MainActivity extends Activity
             System.out.println("Rows: " + rows);
             return rowsObj;
         }
-        return new YoloV5Ncnn.Obj[0][];
     }
 
     private void scan(boolean _onBoard) {
@@ -240,12 +243,15 @@ public class MainActivity extends Activity
                     try {
                         photoFile = createImageFile();
                     } catch (IOException ex) {
+                        ex.printStackTrace();
+                        return;
                     }
                     if (photoFile != null) {
                         lastUri = FileProvider.getUriForFile(this,
                                 "com.tencent.yolov5ncnn.fileprovider",
                                 photoFile);
                         takePicture.putExtra(MediaStore.EXTRA_OUTPUT, lastUri);
+                        takePicture.putExtra("android.intent.extra.quickCapture",true);
                         startActivityForResult(takePicture, TAKE_IMAGE);
                     }
                 }
@@ -281,7 +287,6 @@ public class MainActivity extends Activity
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0,0,0,tileHeight/10);
         TableRow.LayoutParams rowParams = new TableRow.LayoutParams();
-//        rowParams.setMargins(0, 0, 0, tileSpace);
         row.setLayoutParams(rowParams);
         return row;
     }
@@ -290,7 +295,6 @@ public class MainActivity extends Activity
     {
         if (obj == null) {
             TextView button = new TextView(this);
-            System.out.println("tileSpace: " + tileSpace);
             button.setLayoutParams(new TableRow.LayoutParams(tileSpace, tileHeight));
             return button;
         }
@@ -307,7 +311,19 @@ public class MainActivity extends Activity
         button.setClickable(true);
 
         button.setOnClickListener(v->displayPopupWindow(button, onBoard ? solver.board : solver.hand));
+        button.setOnLongClickListener((view) -> {
+            TextView but = (TextView) view;
+            int v = Arrays.asList(values).indexOf(but.getText());
+            int c = Arrays.asList(colors).indexOf(but.getCurrentTextColor());
+            if (onBoard)
+                solver.board[v][c]--;
+            else
+                solver.hand[v][c]--;
 
+            ViewGroup parentView = (ViewGroup) view.getParent();
+            parentView.removeView(view);
+            return true;
+        });
         return button;
     }
 
@@ -320,102 +336,25 @@ public class MainActivity extends Activity
 
         int position = tileSpace;
         for (YoloV5Ncnn.Obj[] objRow : objects) {
+            if (objRow == null) continue;
             if (position + objRow.length * tileWidth > anchorView.getWidth()) {
                 anchorView.addView(row);
                 row = createRow();
                 row.addView(createTile(null));
                 position = tileSpace;
             }
-            for (YoloV5Ncnn.Obj obj : objRow) {
-                row.addView(createTile(obj));
+            for (int i = 0; i < objRow.length; i++) {
+                if (objRow[i] == null) continue;
+                row.addView(createTile(objRow[i]));
                 position += tileWidth;
+                if (i == objRow.length) {
+                    row.addView(createTile(null));
+                    position += tileSpace;
+                }
             }
-            row.addView(createTile(null));
-            position += tileSpace;
+
         }
         anchorView.addView(row);
-    }
-
-    private void showObjects_old(YoloV5Ncnn.Obj[] objects, ImageView view, Bitmap bitmap)
-    {
-        if (objects == null)
-        {
-            view.setImageBitmap(bitmap);
-            return;
-        }
-
-        // draw objects on bitmap
-        Bitmap rgba = bitmap.copy(Bitmap.Config.ARGB_8888, true);
-
-        Canvas canvas = new Canvas(rgba);
-
-        Paint paint = new Paint();
-        paint.setStyle(Paint.Style.FILL);
-
-        Paint borderpaint = new Paint();
-        borderpaint.setStyle(Paint.Style.STROKE);
-        borderpaint.setStrokeWidth(4);
-        borderpaint.setColor(Color.BLACK);
-
-        Paint textpaint = new Paint();
-        textpaint.setTextAlign(Paint.Align.CENTER);
-
-//        int[] colors = {Color.BLUE, Color.BLACK, Color.YELLOW, Color.RED};
-//        String[] values = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "j"};
-        for (int i = 0; i < objects.length; i++)
-        {
-            if (objects[i].fromHand)
-                paint.setColor(Color.GREEN);
-            else
-                paint.setColor(Color.WHITE);
-            paint.setAlpha(150);
-
-            canvas.drawRect(
-                    objects[i].x, objects[i].y,
-                    objects[i].x + objects[i].w,
-                    objects[i].y + objects[i].h,
-                    paint);
-            canvas.drawRect(
-                    objects[i].x, objects[i].y,
-                    objects[i].x + objects[i].w,
-                    objects[i].y + objects[i].h,
-                    borderpaint);
-
-            // draw filled text inside image
-            {
-                textpaint.setColor(colors[objects[i]._color]);
-                textpaint.setAlpha(150);
-                textpaint.setTextSize(objects[i].w);// * getResources().getDisplayMetrics().scaledDensity);
-
-                String text = values[objects[i]._value];//label + " = " + String.format("%.1f", objects[i].prob * 100) + "%";
-//                text += "\n"+rows;
-                float text_width = textpaint.measureText(text);
-                float text_height = - textpaint.ascent() + textpaint.descent();
-
-                float x = objects[i].x+objects[i].w/2;
-                float y = objects[i].y+objects[i].h/2 - text_height/2;
-                if (y < 0)
-                    y = 0;
-                if (x + text_width > rgba.getWidth())
-                    x = rgba.getWidth() - text_width;
-
-//                canvas.drawRect(x, y, x + text_width, y + text_height, textbgpaint);
-                canvas.drawText(text, x, y - textpaint.ascent(), textpaint);
-            }
-        }
-
-//        textpaint.setTextSize(50);
-//        textpaint.setColor(Color.BLACK);
-//        textpaint.setTextAlign(Paint.Align.LEFT);
-//        paint.setColor(Color.MAGENTA);
-//
-//        String text = "Your max possible score: " + score;
-//        float text_width = textpaint.measureText(text) + 10;
-//        float text_height = (-textpaint.ascent() + textpaint.descent()) + 10;
-//        canvas.drawRect(10, 10, text_width, text_height, paint);
-//        canvas.drawText(text, 10, 10 - textpaint.ascent(), textpaint);
-
-        view.setImageBitmap(rgba);
     }
 
     @Override
@@ -447,8 +386,9 @@ public class MainActivity extends Activity
                     classifier.predict(yourSelectedImage, objects[i]);
                 }
                 YoloV5Ncnn.Obj[][] objects_ = new YoloV5Ncnn.Obj[objects.length][1];
-                for (int i = 0; i < objects.length; i++)
-                    objects_[i][0] = objects[i];
+                for (int i = 0; i < objects.length; i++) {
+                    objects_[i][0] = objects[i].prob >= probThresh ? objects[i] : null;
+                }
                 showObjects(objects_, onBoard ? boardView : handView);
                 solver.setTiles(objects, onBoard);
                 YoloV5Ncnn.Obj[][] solution = solve();
@@ -465,34 +405,9 @@ public class MainActivity extends Activity
 
     private Bitmap decodeUri(Uri selectedImage) throws FileNotFoundException
     {
-        // Decode image size
         BitmapFactory.Options o = new BitmapFactory.Options();
-        o.inJustDecodeBounds = true;
-        BitmapFactory.decodeStream(getContentResolver().openInputStream(selectedImage), null, o);
+        Bitmap bitmap = BitmapFactory.decodeStream(getContentResolver().openInputStream(selectedImage), null, o);
 
-        // The new size we want to scale to
-//        final int REQUIRED_SIZE = 640;
-        final int REQUIRED_SIZE = 1280;
-
-        // Find the correct scale value. It should be the power of 2.
-        int width_tmp = o.outWidth, height_tmp = o.outHeight;
-        int scale = 1;
-        while (true) {
-            if (width_tmp / 2 < REQUIRED_SIZE
-               || height_tmp / 2 < REQUIRED_SIZE) {
-                break;
-            }
-            width_tmp /= 2;
-            height_tmp /= 2;
-            scale *= 2;
-        }
-
-        // Decode with inSampleSize
-        BitmapFactory.Options o2 = new BitmapFactory.Options();
-        o2.inSampleSize = scale;
-        Bitmap bitmap = BitmapFactory.decodeStream(getContentResolver().openInputStream(selectedImage), null, o2);
-
-        // Rotate according to EXIF
         int rotate = 0;
         try
         {

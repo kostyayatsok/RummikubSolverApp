@@ -43,8 +43,8 @@ public class Solver {
         Arrays.stream(tiles).forEach(a -> Arrays.fill(a, 0));
         for (int i = 0; i < objects.length; i++)
         {
-            if (objects[i]._value == 13) continue;
-            tiles[objects[i]._value][objects[i]._color]++;
+            if (objects[i].prob >= MainActivity.probThresh)
+                tiles[objects[i]._value][objects[i]._color]++;
         }
     }
 
