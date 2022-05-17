@@ -12,6 +12,9 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class Solver {
 
     int INF = (int) 1e9;
@@ -48,7 +51,6 @@ public class Solver {
         }
     }
 
-    // 4 * K
     int hashRun(int[] run)
     {
         int hash = 0;
@@ -62,7 +64,6 @@ public class Solver {
         return hash;
     }
 
-    // 4 * K
     int[] unhashRun(int hash)
     {
         int[] runs = new int[M];
@@ -369,9 +370,9 @@ public class Solver {
             for (int i = 0; i < K; i++)
             {
                 Collections.sort(rows.subList(rows.size()-n_groups, rows.size()), Comparator.comparingInt(ArrayList::size));
-                for (int j = 0; j < groups[i] && j < n_groups; j++)
+                for (int j = n_groups; groups[i]-(n_groups-j) >= 1 && j >= 1; j--)
                 {
-                    rows.get(rows.size() - 1 - j).add(new Pair(value, i));
+                    rows.get(rows.size() - j).add(new Pair(value, i));
                 }
             }
         }

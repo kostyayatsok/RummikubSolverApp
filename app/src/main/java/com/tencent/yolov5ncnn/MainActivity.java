@@ -14,15 +14,14 @@
 
 package com.tencent.yolov5ncnn;
 
+import static java.util.Arrays.sort;
+
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
 import android.media.ExifInterface;
 import android.graphics.Matrix;
 import android.net.Uri;
@@ -36,10 +35,8 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
-import android.widget.TableLayout;
 import android.widget.TableRow;
 import android.widget.TextView;
 
@@ -52,22 +49,16 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
-import java.util.Map;
 
 
 public class MainActivity extends Activity
 {
-    private static final int SELECT_IMAGE = 1;
-    private static final int TAKE_IMAGE = 2;
-    public static float probThresh = 0.3f;
+    private static final int BOARD_SCAN = 1;
+    private static final int HAND_SCAN = 2;
+    public static float probThresh = 0.1f;
 
-    public LinearLayout boardView, handView;
-    private Button solveButton;
-    private Bitmap bitmap = null;
-    private Bitmap yourSelectedImage = null;
+    private LinearLayout boardView, handView;
     private Uri lastUri = null;
-    private boolean onBoard = false;
-
 
     private YoloV5Ncnn yolov5ncnn = new YoloV5Ncnn();
     private Solver solver = new Solver();
@@ -83,6 +74,23 @@ public class MainActivity extends Activity
     public void onCreate(Bundle savedInstanceState)
     {
         super.onCreate(savedInstanceState);
+//        int[][] hand = new int[][] {
+//                new int[] { 1,2,3,4,5,6,7,8,9,10,11,12,13,1,2,3,4,5,6,7,8,9,10,11,12,13,0 },
+//                new int[] { 1,2,3,4,5,6,7,8,9,10,11,12,13,1,2,3,4,5,6,7,8,9,10,11,12,13,0 },
+//                new int[] { 1,2,3,4,5,6,7,8,9,10,11,12,13,1,2,3,4,5,6,7,8,9,10,11,12,13 },
+//                new int[] { 1,2,3,4,5,6,7,8,9,10,11,12,13,1,2,3,4,5,6,7,8,9,10,11,12,13 },
+//        };
+//
+//        int[][] board = new int[][] {
+//                new int[] {  },
+//                new int[] {  },
+//                new int[] {  },
+//                new int[] {  },
+//        };
+//        long startTime = System.nanoTime();
+//        new SolverNew().solve(hand, board);
+//        long stopTime = System.nanoTime();
+//        System.out.println("NewSolver time: " + (stopTime - startTime));
 
         requestWindowFeature(Window.FEATURE_NO_TITLE);
 //        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
@@ -99,7 +107,7 @@ public class MainActivity extends Activity
 
         boardView = findViewById(R.id.board);
         handView = findViewById(R.id.hand);
-        solveButton = findViewById(R.id.solve);
+        Button solveButton = findViewById(R.id.solve);
 
         findViewById(R.id.scanBoard).setOnClickListener(v -> scan(true));
         findViewById(R.id.scanHand).setOnClickListener(arg0 -> scan(false));
@@ -108,9 +116,13 @@ public class MainActivity extends Activity
 
         solveButton.setOnClickListener(arg -> {
             YoloV5Ncnn.Obj[][] solution = solve();
-            if (solution.length > 0)
-                showObjects(solution, boardView);
+            showObjects(solution, true);
         });
+
+        YoloV5Ncnn.Obj plus = yolov5ncnn.new Obj();
+        plus.addTile = true;
+        boardView.addView(createTile(plus, true));
+        handView.addView(createTile(plus, false));
     }
 
     @Override
@@ -121,7 +133,9 @@ public class MainActivity extends Activity
         tileSpace = tileWidth/4;
     }
 
-    private void displayPopupWindow(TextView anchorView, int[][] tiles) {
+    private void changeTile(TextView anchorView, boolean onBoard) {
+        int[][] tiles = onBoard ? solver.board : solver.hand;
+
         anchorView.setBackground(getDrawable(R.drawable.broder_magenta));
         int v = Arrays.asList(values).indexOf(anchorView.getText());
         int c = Arrays.asList(colors).indexOf(anchorView.getCurrentTextColor());
@@ -140,9 +154,7 @@ public class MainActivity extends Activity
             btnTag.setGravity(Gravity.CENTER);
             btnTag.setClickable(true);
             btnTag.setBackground(getDrawable(R.drawable.broder_gray));
-            btnTag.setOnClickListener(arg0->{
-                anchorView.setText(val);
-            });
+            btnTag.setOnClickListener(arg0-> anchorView.setText(val));
             layout.addView(btnTag);
 
         }
@@ -151,9 +163,7 @@ public class MainActivity extends Activity
             btnTag = new Button(this);
             btnTag.setLayoutParams(params);
             btnTag.setBackgroundColor(col);
-            btnTag.setOnClickListener(arg0->{
-                anchorView.setTextColor(col);
-            });
+            btnTag.setOnClickListener(arg0-> anchorView.setTextColor(col));
             layout.addView(btnTag);
 
         }
@@ -170,6 +180,91 @@ public class MainActivity extends Activity
             int new_c = Arrays.asList(colors).indexOf(anchorView.getCurrentTextColor());
             tiles[new_v][new_c]++;
             anchorView.setBackground(MainActivity.this.getDrawable(R.drawable.broder_gray));
+        });
+        popup.showAsDropDown(anchorView);
+    }
+
+    private void addTileManually(TextView anchorView, boolean onBoard) {
+        int[][] tiles = onBoard ? solver.board : solver.hand;
+        LinearLayout view = onBoard ? boardView : handView;
+
+        anchorView.setLayoutParams(new TableRow.LayoutParams(tileWidth, tileHeight));
+        anchorView.setBackground(getDrawable(R.drawable.broder_magenta));
+        anchorView.setText("?");
+        anchorView.setTextColor(Color.LTGRAY);
+
+        PopupWindow popup = new PopupWindow(this);
+        View changeTileView = getLayoutInflater().inflate(R.layout.change_tile, null);
+
+        LinearLayout layout = changeTileView.findViewById(R.id.chooseValue);
+        TextView btnTag;
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(tileWidth, tileHeight);
+        params.weight = 1;
+        for (String val : values) {
+            btnTag = new TextView(this);
+            btnTag.setLayoutParams(params);
+            btnTag.setText(val);
+            btnTag.setGravity(Gravity.CENTER);
+            btnTag.setClickable(true);
+            btnTag.setBackground(getDrawable(R.drawable.broder_gray));
+            btnTag.setOnClickListener(arg0-> anchorView.setText(val));
+            layout.addView(btnTag);
+
+        }
+        layout = changeTileView.findViewById(R.id.chooseColor);
+        for (int col : colors) {
+            btnTag = new Button(this);
+            btnTag.setLayoutParams(params);
+            btnTag.setBackgroundColor(col);
+            btnTag.setOnClickListener(arg0-> anchorView.setTextColor(col));
+            layout.addView(btnTag);
+
+        }
+
+        popup.setContentView(changeTileView);
+        popup.setHeight(WindowManager.LayoutParams.WRAP_CONTENT);
+        popup.setWidth(WindowManager.LayoutParams.WRAP_CONTENT);
+        // Closes the popup window when touch outside of it - when looses focus
+        popup.setOutsideTouchable(false);
+        popup.setFocusable(true);
+        popup.setOnDismissListener(() -> {
+            int new_v = Arrays.asList(values).indexOf(anchorView.getText());
+            int new_c = Arrays.asList(colors).indexOf(anchorView.getCurrentTextColor());
+            if (new_v >= 0 && new_v < values.length && new_c >= 0 && new_c < colors.length) {
+                tiles[new_v][new_c]++;
+
+                LinearLayout row = (LinearLayout) anchorView.getParent();
+                row.removeView(anchorView);
+
+                YoloV5Ncnn.Obj obj = yolov5ncnn.new Obj();
+                obj._value = new_v;
+                obj._color = new_c;
+                obj.prob = 1;
+
+                row.addView(createTile(obj, onBoard));
+                row.addView(createTile(null, onBoard));
+
+                int position = row.getChildCount() / 2 * tileWidth + (row.getChildCount() / 2 + 1) * tileSpace;
+//                for (int i = 0; i < row.getChildCount(); i++) {
+//                    position += row.getChildAt(i).getWidth();
+//                }
+                YoloV5Ncnn.Obj plus = yolov5ncnn.new Obj();
+                plus.addTile = true;
+                if (position + tileWidth >= view.getWidth()) {
+                    row = createRow();
+                    row.addView(createTile(null, onBoard));
+                    row.addView(createTile(plus, onBoard));
+                    view.addView(row);
+                }
+                else {
+                    row.addView(createTile(plus, onBoard));
+                }
+            } else {
+                anchorView.setLayoutParams(new TableRow.LayoutParams(tileWidth, tileWidth));
+                anchorView.setBackground(getDrawable(R.drawable.plus));
+                anchorView.setText("+");
+                anchorView.setTextColor(Color.GREEN);
+            }
         });
         popup.showAsDropDown(anchorView);
     }
@@ -195,7 +290,7 @@ public class MainActivity extends Activity
         int score = solver.maxScore(0, runsHashes);
         if (score < 0) {
             popupMessage();
-            return new YoloV5Ncnn.Obj[0][];
+            return getBoard();
         } else {
             int handScore = score;
             for (int[] row : solver.board)
@@ -220,51 +315,44 @@ public class MainActivity extends Activity
 
                     tiles[obj._value][obj._color]--;
                 }
-
             }
             System.out.println("Rows: " + rows);
             return rowsObj;
         }
     }
 
-    private void scan(boolean _onBoard) {
-        onBoard=_onBoard;
-
-        final CharSequence[] options = { "Choose from Photos", "Take Picture", "Cancel" };
-        AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
-        builder.setTitle("New Test Image");
-
-        builder.setItems(options, (dialog, item) -> {
-            if (options[item].equals("Take Picture")) {
-                // start default camera
-                Intent takePicture = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-                if (takePicture.resolveActivity(getPackageManager()) != null) {
-                    File photoFile = null;
-                    try {
-                        photoFile = createImageFile();
-                    } catch (IOException ex) {
-                        ex.printStackTrace();
-                        return;
-                    }
-                    if (photoFile != null) {
-                        lastUri = FileProvider.getUriForFile(this,
-                                "com.tencent.yolov5ncnn.fileprovider",
-                                photoFile);
-                        takePicture.putExtra(MediaStore.EXTRA_OUTPUT, lastUri);
-                        takePicture.putExtra("android.intent.extra.quickCapture",true);
-                        startActivityForResult(takePicture, TAKE_IMAGE);
-                    }
+    private YoloV5Ncnn.Obj[][] getBoard() {
+        ArrayList<YoloV5Ncnn.Obj[]> solution_ = new ArrayList<>();
+        for (int val = 0; val < solver.board.length; val++) {
+            for (int col = 0; col < solver.board[val].length; col++) {
+                for (int i = 0; i < solver.board[val][col]; i++) {
+                    YoloV5Ncnn.Obj obj = yolov5ncnn.new Obj();
+                    obj._color = col;
+                    obj._value = val;
+                    solution_.add(new YoloV5Ncnn.Obj[]{obj});
                 }
             }
-            else if (options[item].equals("Choose from Photos")) {
-                Intent pickPhoto = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.INTERNAL_CONTENT_URI);
-                startActivityForResult(pickPhoto , SELECT_IMAGE);
+        }
+        return solution_.toArray(new YoloV5Ncnn.Obj[solution_.size()][1]);
+    }
+
+    private void scan(boolean onBoard) {
+        Intent takePicture = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (takePicture.resolveActivity(getPackageManager()) != null) {
+            File photoFile;
+            try {
+                photoFile = createImageFile();
+            } catch (IOException ex) {
+                ex.printStackTrace();
+                return;
             }
-            else if (options[item].equals("Cancel")) {
-                dialog.dismiss();
-            }
-        });
-        builder.show();
+            lastUri = FileProvider.getUriForFile(this,
+                    "com.tencent.yolov5ncnn.fileprovider",
+                    photoFile);
+            takePicture.putExtra(MediaStore.EXTRA_OUTPUT, lastUri);
+            takePicture.putExtra("android.intent.extra.quickCapture",true);
+            startActivityForResult(takePicture, onBoard ? BOARD_SCAN : HAND_SCAN);
+        }
     }
 
     private File createImageFile() throws IOException {
@@ -272,26 +360,25 @@ public class MainActivity extends Activity
         String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
         String imageFileName = "JPEG_" + timeStamp + "_";
         File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-        File image = File.createTempFile(
+
+        return File.createTempFile(
                 imageFileName,  /* prefix */
                 ".jpg",         /* suffix */
                 storageDir      /* directory */
         );
-
-        return image;
     }
 
     private LinearLayout createRow()
     {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setPadding(0,0,0,tileHeight/10);
+        row.setPadding(0,tileHeight/20,0,tileHeight/20);
         TableRow.LayoutParams rowParams = new TableRow.LayoutParams();
         row.setLayoutParams(rowParams);
         return row;
     }
 
-    private TextView createTile(YoloV5Ncnn.Obj obj)
+    private TextView createTile(YoloV5Ncnn.Obj obj, boolean boardTile)
     {
         if (obj == null) {
             TextView button = new TextView(this);
@@ -299,62 +386,89 @@ public class MainActivity extends Activity
             return button;
         }
         TextView button = new TextView(this);
-        button.setLayoutParams(new TableRow.LayoutParams(tileWidth, tileHeight));
-        button.setText(values[obj._value]);
-        button.setTextColor(colors[obj._color]);
         if (obj.fromHand) {
+            button.setLayoutParams(new TableRow.LayoutParams(tileWidth, tileHeight));
+            button.setGravity(Gravity.CENTER);
+            button.setText(values[obj._value]);
+            button.setTextColor(colors[obj._color]);
             button.setBackground(getDrawable(R.drawable.broder_green));
+        } else if (obj.addTile) {
+            button.setLayoutParams(new TableRow.LayoutParams(tileWidth, tileWidth));
+            button.setGravity(Gravity.CENTER);
+            button.setClickable(true);
+            button.setOnClickListener(v->addTileManually(button, boardTile));
+            button.setText("+");
+            button.setTextColor(Color.GREEN);
+            button.setBackground(getDrawable(R.drawable.plus));
         } else {
+            button.setLayoutParams(new TableRow.LayoutParams(tileWidth, tileHeight));
+            button.setGravity(Gravity.CENTER);
+            button.setClickable(true);
+            button.setOnClickListener(v->changeTile(button, boardTile));
+
+
             button.setBackground(getDrawable(R.drawable.broder_gray));
+            button.setText(values[obj._value]);
+            button.setTextColor(colors[obj._color]);
+            button.setOnLongClickListener((view) -> {
+                TextView but = (TextView) view;
+                int v = Arrays.asList(values).indexOf(but.getText());
+                int c = Arrays.asList(colors).indexOf(but.getCurrentTextColor());
+                if (boardTile)
+                    solver.board[v][c]--;
+                else
+                    solver.hand[v][c]--;
+
+                ViewGroup parentView = (ViewGroup) view.getParent();
+                parentView.removeView(view);
+                return true;
+            });
+
         }
-        button.setGravity(Gravity.CENTER);
-        button.setClickable(true);
 
-        button.setOnClickListener(v->displayPopupWindow(button, onBoard ? solver.board : solver.hand));
-        button.setOnLongClickListener((view) -> {
-            TextView but = (TextView) view;
-            int v = Arrays.asList(values).indexOf(but.getText());
-            int c = Arrays.asList(colors).indexOf(but.getCurrentTextColor());
-            if (onBoard)
-                solver.board[v][c]--;
-            else
-                solver.hand[v][c]--;
-
-            ViewGroup parentView = (ViewGroup) view.getParent();
-            parentView.removeView(view);
-            return true;
-        });
         return button;
     }
 
-    private void showObjects(YoloV5Ncnn.Obj[][] objects, LinearLayout anchorView)
+    private void showObjects(YoloV5Ncnn.Obj[][] objects, boolean onBoard)
     {
-        anchorView.removeAllViews();
+        if (objects == null) return;
+
+        LinearLayout view = onBoard ? boardView : handView;
+        view.removeAllViews();
 
         LinearLayout row = createRow();
-        row.addView(createTile(null));
+        row.setGravity(Gravity.CENTER);
+        row.addView(createTile(null, onBoard));
 
         int position = tileSpace;
         for (YoloV5Ncnn.Obj[] objRow : objects) {
             if (objRow == null) continue;
-            if (position + objRow.length * tileWidth > anchorView.getWidth()) {
-                anchorView.addView(row);
+            if (position + objRow.length * tileWidth > view.getWidth()) {
+                view.addView(row);
                 row = createRow();
-                row.addView(createTile(null));
+                row.addView(createTile(null, onBoard));
                 position = tileSpace;
             }
             for (int i = 0; i < objRow.length; i++) {
                 if (objRow[i] == null) continue;
-                row.addView(createTile(objRow[i]));
+                row.addView(createTile(objRow[i], onBoard));
                 position += tileWidth;
-                if (i == objRow.length) {
-                    row.addView(createTile(null));
+                if (i + 1 == objRow.length) {
+                    row.addView(createTile(null, onBoard));
                     position += tileSpace;
                 }
             }
 
         }
-        anchorView.addView(row);
+        if (position + tileWidth > view.getWidth()) {
+            view.addView(row);
+            row = createRow();
+            row.addView(createTile(null, onBoard));
+        }
+        YoloV5Ncnn.Obj plus = yolov5ncnn.new Obj();
+        plus.addTile = true;
+        row.addView(createTile(plus, onBoard));
+        view.addView(row);
     }
 
     @Override
@@ -365,40 +479,42 @@ public class MainActivity extends Activity
         if (resultCode == RESULT_OK) {
             try
             {
-                Uri selectedImage = null;
-                if (requestCode == SELECT_IMAGE) {
-                    if (null != data) {
-                        selectedImage = data.getData();
-                    }
-                } else if (requestCode == TAKE_IMAGE) {
-                    selectedImage = lastUri;
-                }
+                Uri selectedImage = lastUri;
                 if (selectedImage == null)
                     return;
-                bitmap = decodeUri(selectedImage);
+                Bitmap bitmap = decodeUri(selectedImage);
 
                 if (bitmap == null)
                     return;
-                yourSelectedImage = bitmap.copy(Bitmap.Config.ARGB_8888, true);
 
-                YoloV5Ncnn.Obj[] objects = yolov5ncnn.Detect(yourSelectedImage, false);
-                for (int i = 0; i < objects.length; i++) {
-                    classifier.predict(yourSelectedImage, objects[i]);
+                long startTime = System.nanoTime();
+                YoloV5Ncnn.Obj[] objects = yolov5ncnn.Detect(bitmap, false);
+                System.out.println("Detect time: " + (System.nanoTime() - startTime));
+                long startTime2 = System.nanoTime();
+                for (YoloV5Ncnn.Obj object : objects) {
+                    classifier.predict(bitmap, object);
                 }
+                System.out.println("Class time: " + (System.nanoTime() - startTime2));
+                System.out.println("Class time avg: " + (System.nanoTime() - startTime2)/objects.length);
+                System.out.println("Total time: " + (System.nanoTime() - startTime));
+
+                sort(objects, (a, b)->{
+                    if (a._value == b._value) return Integer.compare(a._color, b._color);
+                    return Integer.compare(a._value, b._value);
+                });
                 YoloV5Ncnn.Obj[][] objects_ = new YoloV5Ncnn.Obj[objects.length][1];
                 for (int i = 0; i < objects.length; i++) {
                     objects_[i][0] = objects[i].prob >= probThresh ? objects[i] : null;
                 }
-                showObjects(objects_, onBoard ? boardView : handView);
-                solver.setTiles(objects, onBoard);
+
+                showObjects(objects_, requestCode==BOARD_SCAN);
+                solver.setTiles(objects, requestCode==BOARD_SCAN);
                 YoloV5Ncnn.Obj[][] solution = solve();
-                if (solution.length > 0)
-                    showObjects(solution, boardView);
+                showObjects(solution, true);
             }
             catch (FileNotFoundException e)
             {
                 Log.e("MainActivity", "FileNotFoundException");
-                return;
             }
         }
     }

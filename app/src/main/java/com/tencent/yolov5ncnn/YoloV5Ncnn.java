@@ -27,11 +27,12 @@ public class YoloV5Ncnn
         public float y;
         public float w;
         public float h;
-        public float prob;
+        public float prob = 0;
         public String label;
-        public int _color;
-        public int _value;
+        public int _color = -1;
+        public int _value = -1;
         public boolean fromHand = false;
+        public boolean addTile = false;
     }
 
     public native Obj[] Detect(Bitmap bitmap, boolean use_gpu);

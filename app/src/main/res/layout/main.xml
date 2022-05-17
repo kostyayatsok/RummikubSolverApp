@@ -3,17 +3,24 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    android:textStyle="bold">
 
-    <LinearLayout
-        android:id="@+id/hand"
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_weight="0.7"
-        android:background="@drawable/background"
-        android:orientation="vertical">
+        android:layout_height="match_parent"
+        android:layout_weight="0.7">
 
-    </LinearLayout>
+        <LinearLayout
+            android:id="@+id/hand"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_weight="0.7"
+            android:background="@drawable/background"
+            android:orientation="vertical">
+
+        </LinearLayout>
+    </ScrollView>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -43,15 +50,21 @@
             android:text="scan board" />
     </LinearLayout>
 
-    <LinearLayout
-        android:id="@+id/board"
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_weight="0.5"
-        android:background="@drawable/background"
-        android:clickable="true"
-        android:orientation="vertical">
+        android:layout_height="match_parent"
+        android:layout_weight="0.7">
 
-    </LinearLayout>
+        <LinearLayout
+            android:id="@+id/board"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_weight="0.5"
+            android:background="@drawable/background"
+            android:clickable="true"
+            android:orientation="vertical">
+
+        </LinearLayout>
+    </ScrollView>
 
 </LinearLayout>

@@ -2,14 +2,24 @@ package com.tencent.yolov5ncnn;
 
 
 import android.content.Context;
+import android.content.res.AssetFileDescriptor;
+import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.widget.ImageView;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.util.HashMap;
+import org.tensorflow.lite.Interpreter;
+import org.tensorflow.lite.gpu.CompatibilityList;
+import org.tensorflow.lite.gpu.GpuDelegate;
 
 import ai.onnxruntime.*;
 
@@ -22,23 +32,44 @@ public class ClassifierONNX {
     int IMAGE_SIZE_X = 48;
     int IMAGE_SIZE_Y = 48;
 
+    Interpreter interpreter;
 
-    public ClassifierONNX(Context context) {
-        env = OrtEnvironment.getEnvironment();
-        byte[] buffer = null;
+
+    private MappedByteBuffer loadModelFile(AssetManager assetManager, String modelPath) {
+        AssetFileDescriptor fileDescriptor = null;
         try {
-            InputStream iS = context.getAssets().open("rummi_92.onnx");
-            buffer = new byte[iS.available()];
-            iS.read(buffer);
+            fileDescriptor = assetManager.openFd(modelPath);
         } catch (IOException e) {
             e.printStackTrace();
         }
+        FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor());
+        FileChannel fileChannel = inputStream.getChannel();
+        long startOffset = fileDescriptor.getStartOffset();
+        long declaredLength = fileDescriptor.getDeclaredLength();
         try {
-            session = env.createSession(buffer, new OrtSession.SessionOptions());
-        } catch (OrtException e) {
+            return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength);
+        } catch (IOException e) {
             e.printStackTrace();
         }
+        return null;
+    }
 
+    public ClassifierONNX(Context context) {
+        AssetManager assetManager = context.getAssets();
+        Interpreter.Options options = new Interpreter.Options();
+        CompatibilityList compatList = new CompatibilityList();
+
+        if(compatList.isDelegateSupportedOnThisDevice()){
+            // if the device has a supported GPU, add the GPU delegate
+            GpuDelegate.Options delegateOptions = compatList.getBestOptionsForThisDevice();
+            GpuDelegate gpuDelegate = new GpuDelegate(delegateOptions);
+            options.addDelegate(gpuDelegate);
+        } else {
+            // if the GPU is not supported, run on 4 threads
+            options.setNumThreads(4);
+        }
+
+        interpreter = new Interpreter(loadModelFile(assetManager, "rummi_936.tflite"), options);
     }
 
     FloatBuffer preProcess(Bitmap bitmap) {
@@ -97,9 +128,15 @@ public class ClassifierONNX {
             put("input_1", finalT);
         }};
 
+        float[][] outputs = new float[1][54];
+        interpreter.run(sourceArray, outputs);
+
         float[][] results;
         try {
+            long startTime2 = System.nanoTime();
             OrtSession.Result output = session.run(input);
+            System.out.println("session.run: " + (System.nanoTime()-startTime2));
+
             results = (float[][]) output.get(0).getValue();
         } catch (Exception e) {
             e.printStackTrace();
@@ -116,9 +153,10 @@ public class ClassifierONNX {
                 max_label = i;
             }
         }
-        System.out.println("max_prob " + max_prob);
+//        System.out.println("max_prob " + max_prob + " detection prob " + object.prob);
         object._color = max_label % 4;
         object._value = max_label / 4;
-        object.prob = max_prob;
+        object.prob = 2 * (max_prob * object.prob) / (max_prob + object.prob);
+//        System.out.println("new_prob " + object.prob);
     }
 }
